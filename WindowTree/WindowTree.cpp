@@ -4,7 +4,6 @@
 //
 #include <AtlBase.h> // Conversion routines (CW2A)
 #include <Windows.h> // Windows stuff
-#include <map>
 #include <unordered_map>
 #include <assert.h>
 #include <fstream>
@@ -12,6 +11,9 @@
 #include <iomanip>
 #include <regex>
 #include <type_traits>
+#include <set>
+#include <psapi.h>
+#include "WindowTree.h"
 
 // Characters to use as a filed seperator.
 // Used define so can use c-string concatonation.
@@ -19,26 +21,9 @@
 
 bool output_handle_count = false;
 
-// In case I wan to use a different map, like std::unordered_map.
-// NOTE: Seems that std::unordered_map is slower than std::map in this use case.
-template <typename...Ts>
-using my_map = std::map<Ts...>;
-
 struct node_t;
 
-using hwnd_to_children_ptr_t = my_map<HWND, node_t*>;
 using hwnd_to_allocated_childern_t = my_map<HWND, node_t>;
-
-enum window_type_e {
-	invalid,        /// HWND specified by user, but is invalid.
-	special,        /// Special window (desktop or root).  Can't be reached by window enumeration.
-	message,        /// Message window.
-	top_level,      /// Top level window.
-	not_top_level,  /// Not a top level window.
-	user_specified, /// HWND specified by user and was not found before.
-	not_enumable,   /// Other window that can't be reached by window enumeration.
-	brute_force,    /// Specified by using brute force method (iterating over each possible HWND value).
-};
 
 std::wostream& operator<<(std::wostream& os, window_type_e status) {
 	switch (status)
@@ -74,14 +59,7 @@ std::wostream& operator<<(std::wostream& os, window_type_e status) {
 	return os;
 }
 
-enum verify_correctly_parented_e {
-	correct,               /// Correctly parented
-	parent_node_not_found, /// Parent node not found
-	parent_was_null,       /// Parent node was null and not expected
-	parent_was_different   /// Parent node was different than expected
-}; 
-
-std::wostream& operator<< (std::wostream& os, verify_correctly_parented_e value)
+std::wostream& operator<<(std::wostream& os, verify_correctly_parented_e value)
 {
 	switch (value)
 	{
@@ -115,10 +93,14 @@ void output_heading(std::wostream& os)
 		FIELD_SEPERATOR "tree"
 //		FIELD_SEPERATOR "pad"
 		FIELD_SEPERATOR "class name"
-		FIELD_SEPERATOR "window title\n";
+		FIELD_SEPERATOR "window title"
+		FIELD_SEPERATOR "pid"
+		FIELD_SEPERATOR "tid"
+		FIELD_SEPERATOR "process name"
+		"\n";
 }
 
-void output_window_class_and_title(std::wostream & os, const HWND &hWnd)
+auto& output_window_class_and_title(std::wostream & os, const HWND &hWnd)
 {
 	wchar_t window_class[1024], window_title[1024];
 	window_class[0] = window_title[0] = 0;
@@ -133,69 +115,23 @@ void output_window_class_and_title(std::wostream & os, const HWND &hWnd)
 		= std::regex_replace(window_title, std::wregex(L"(\r\n?|\n\r?)")
 			, FIELD_SEPERATOR );
 
-	os << CW2A(wc.c_str()) << FIELD_SEPERATOR << CW2A(wt.c_str()) << std::endl;
+	os << CW2A(wc.c_str()) << FIELD_SEPERATOR << CW2A(wt.c_str());
+	return os;
 }
 
-struct node_t;
-
-/// Node allocation done here.  They are referenced by HWND.
+// Node allocation done here.  They are referenced by HWND.
 hwnd_to_allocated_childern_t all_nodes;
 
-/// Node to handle information about it.
-struct node_t
-{
-	/// Type of window
-	window_type_e m_eType;
-
-	/// HWND that this window is referencing
-	HWND m_hCurrent;
-
-	/// Parent node where m_pParent->m_hCurrent == ::GetParent(m_hCurrent),
-	/// unless m_pParent is nullptr, then ::GetParent(m_hCurrent) == nullptr
-	node_t* m_pParent = nullptr;
-
-	/// HWND to child nodes (node_t*)
-	hwnd_to_children_ptr_t m_hwnd_to_child_node;
-
-	/// Used to mark node for operations where don't want to duplicate
-	bool m_bMarked = false;
-
-	/// Used to count how many handles have been outputted.
-	static size_t outputted_handle_count;
-
-	node_t(HWND hCurrent, window_type_e type);
-	verify_correctly_parented_e verify_correctly_parented() const;
-	void add_child(node_t* pChild);
-	void output_node_and_children(std::wostream& os, int indent = 0);
-
-	static size_t m_nMax_depth;
-	size_t calc_max_depth() const
-	{
-		size_t max_depth = 1;
-		for (auto& child : m_hwnd_to_child_node) {
-			max_depth = (std::max)(max_depth, child.second->calc_max_depth() + 1);
-		}
-		return max_depth;
-	}
-	size_t max_depth()
-	{
-		if (m_nMax_depth == -1) {
-			auto this_ = this;
-			while (this_->m_pParent) {
-				this_ = this_->m_pParent;
-			}
-			m_nMax_depth = this_->calc_max_depth();
-		}
-		return m_nMax_depth;
-	}
-};
 
 size_t node_t::outputted_handle_count = 0;
 size_t node_t::m_nMax_depth = -1;
 
-inline node_t::node_t(HWND hCurrent, window_type_e type)
+inline node_t::node_t(HWND hCurrent, window_type_e type, DWORD pid, DWORD tid, std::wstring const* pExe_name)
 	: m_eType(type)
 	, m_hCurrent(hCurrent)
+	, m_pid(pid)
+	, m_tid(tid)
+	, m_pExe_name(pExe_name)
 {}
 
 inline verify_correctly_parented_e node_t::verify_correctly_parented() const
@@ -250,10 +186,13 @@ inline void node_t::output_node_and_children(std::wostream & os, int indent)
 		<< L"\"" FIELD_SEPERATOR;
 	
 	// padding
-	//std::fill_n(std::ostreambuf_iterator<wchar_t>(os), max_depth()-1, L' ');
+	//std::fill_n(std::ostreambuf_iterator<wchar_t>(os), max_depth_from_root()-1, L' ');
 	//os << FIELD_SEPERATOR;
 
-	output_window_class_and_title(os, hWnd);
+	output_window_class_and_title(os, hWnd)
+		<< FIELD_SEPERATOR << std::hex << m_pid
+		<< FIELD_SEPERATOR << m_tid
+		<< FIELD_SEPERATOR << *m_pExe_name << std::dec << std::endl;
 
 	m_bMarked = true;
 
@@ -263,12 +202,71 @@ inline void node_t::output_node_and_children(std::wostream & os, int indent)
 	}
 }
 
+inline size_t node_t::max_depth_from_here() const
+{
+	size_t max_depth = 1;
+	for (auto& child : m_hwnd_to_child_node) {
+		max_depth = (std::max)(max_depth, child.second->max_depth_from_here() + 1);
+	}
+	return max_depth;
+}
+
+inline node_t * node_t::get_root()
+{
+	auto this_ = this;
+	while (this_->m_pParent) {
+		this_ = this_->m_pParent;
+	}
+	return this_;
+}
+
+inline size_t node_t::max_depth_from_root()
+{
+	if (m_nMax_depth == -1) {
+		auto this_ = get_root();
+		m_nMax_depth = this_->max_depth_from_here();
+	}
+	return m_nMax_depth;
+}
+
+std::set<std::wstring> exe_names;
+std::map<DWORD, std::wstring const*> pid_to_exe_name;
+
 void allocate_node(HWND hwnd, window_type_e window_status)
 {
+	DWORD pid;
+	auto tid = ::GetWindowThreadProcessId(hwnd, &pid);
+	auto it_found_pid = pid_to_exe_name.find(pid);
+	std::wstring const* pProcess_name = nullptr;
+	if (it_found_pid == pid_to_exe_name.end()) {
+		wchar_t exe_name[1024]; exe_name[0] = 0;
+		if (HANDLE hProcess = ::OpenProcess(
+			PROCESS_ALL_ACCESS | PROCESS_QUERY_INFORMATION |
+			PROCESS_VM_READ,
+			FALSE, pid))
+		{
+			auto chars_copied = ::GetProcessImageFileNameW(hProcess, exe_name, _countof(exe_name));
+			assert(chars_copied > 0);
+			exe_name[chars_copied] = 0;
+			::CloseHandle(hProcess);
+			auto found = exe_names.emplace(exe_name);
+			pProcess_name = &*found.first;
+		}
+		else
+		{
+			auto found = exe_names.emplace(L"* Couldn't open process handle *");
+			pProcess_name = &*found.first;
+		}
+		pid_to_exe_name.try_emplace(pid, pProcess_name);
+	}
+	else {
+		pProcess_name = it_found_pid->second;
+	}
+
 	bool inserted;
 	decltype(all_nodes)::iterator itNode;
 	std::tie(itNode, inserted)
-		= all_nodes.try_emplace(hwnd, hwnd, window_status);
+		= all_nodes.try_emplace(hwnd, hwnd, window_status, pid, tid, pProcess_name);
 	assert(inserted); // Shouldn't have to allocate twice.
 }
 
