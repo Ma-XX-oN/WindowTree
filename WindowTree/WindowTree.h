@@ -84,3 +84,5 @@ struct node_t
 	// Finds the depth from this node to the deepest leaf
 	size_t max_depth_from_here() const;
 };
+
+void output_window_tree(const char * filename);

@@ -4,6 +4,7 @@
 //
 #include <AtlBase.h> // Conversion routines (CW2A)
 #include <Windows.h> // Windows stuff
+#include <WinUser.h>
 #include <unordered_map>
 #include <assert.h>
 #include <fstream>
@@ -91,12 +92,14 @@ void output_heading(std::wostream& os)
 		FIELD_SEPERATOR "got expected"
 		FIELD_SEPERATOR "visible"
 		FIELD_SEPERATOR "tree"
-//		FIELD_SEPERATOR "pad"
-		FIELD_SEPERATOR "class name"
-		FIELD_SEPERATOR "window title"
+		//FIELD_SEPERATOR "pad"
+		FIELD_SEPERATOR "parent"
+		FIELD_SEPERATOR "owner"
 		FIELD_SEPERATOR "pid"
 		FIELD_SEPERATOR "tid"
 		FIELD_SEPERATOR "process name"
+		FIELD_SEPERATOR "class name"
+		FIELD_SEPERATOR "window title"
 		"\n";
 }
 
@@ -183,16 +186,20 @@ inline void node_t::output_node_and_children(std::wostream & os, int indent)
 
 	std::fill_n(std::ostreambuf_iterator<wchar_t>(os), indent, L' ');
 	os << hWnd
-		<< L"\"" FIELD_SEPERATOR;
+		<< L"\"";
 	
 	// padding
-	//std::fill_n(std::ostreambuf_iterator<wchar_t>(os), max_depth_from_root()-1, L' ');
-	//os << FIELD_SEPERATOR;
+	std::fill_n(std::ostreambuf_iterator<wchar_t>(os), max_depth_from_root()-1-indent, L' ');
 
-	output_window_class_and_title(os, hWnd)
-		<< FIELD_SEPERATOR << std::hex << m_pid
+	os << std::hex
+		<< FIELD_SEPERATOR << std::setw(8) << (m_pParent ? m_pParent->m_hCurrent : nullptr)
+		<< FIELD_SEPERATOR << GetWindow(m_hCurrent, GW_OWNER)
+		<< FIELD_SEPERATOR << std::setw(4) << m_pid
 		<< FIELD_SEPERATOR << m_tid
-		<< FIELD_SEPERATOR << *m_pExe_name << std::dec << std::endl;
+		<< FIELD_SEPERATOR << *m_pExe_name << std::dec
+		<< FIELD_SEPERATOR;
+
+	output_window_class_and_title(os, hWnd) << std::endl;
 
 	m_bMarked = true;
 
@@ -471,9 +478,9 @@ void set_locale_on_stream(std::wfstream &os)
 //	assert(!os.bad());
 //#endif
 
-int main()
+void output_window_tree(const char * filename)
 {
-	std::wfstream os("window-tree.txt" , std::ios_base::out | std::ios_base::trunc);
+	std::wfstream os(filename, std::ios_base::out | std::ios_base::trunc);
 	os.exceptions(os.badbit | os.failbit | os.eofbit);
 
 	output_handle_count = true;
@@ -487,5 +494,11 @@ int main()
 	catch (std::ios_base::failure& e) {
 		std::cerr << "Exception: " << e.what() << std::endl;
 	}
+}
+
+int main()
+{
+	auto* filename = "window-tree.txt";
+	output_window_tree(filename);
 	return 0;
 }
