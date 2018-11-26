@@ -86,17 +86,21 @@ std::wostream& operator<<(std::wostream& os, verify_correctly_parented_e value)
 void output_heading(std::wostream& os)
 {
 	if (output_handle_count) {
-		os << "handle #" FIELD_SEPERATOR;
+		os << "handle  " FIELD_SEPERATOR;
 	}
-	os << "window_status"
-		FIELD_SEPERATOR "got expected"
-		FIELD_SEPERATOR "visible"
-		FIELD_SEPERATOR "tree"
-		//FIELD_SEPERATOR "pad"
-		FIELD_SEPERATOR "parent"
+	//handle ! window_status!expected!v!tree               !O!o!owner   !parentGP!parent  !parentGA! pid! tid!process name!class name!window title
+	os << " window_status"
+		FIELD_SEPERATOR "expected"
+		FIELD_SEPERATOR "v" // visible
+		FIELD_SEPERATOR "tree               "
+		FIELD_SEPERATOR "T" // Is top level  (m_hCurrent == GetAncestor(m_hCurrent, GA_ROOT))
+		FIELD_SEPERATOR "t" // Is top level !(GetWindowLong(m_hCurrent, GWL_STYLE) & WS_CHILD)
 		FIELD_SEPERATOR "owner"
-		FIELD_SEPERATOR "pid"
-		FIELD_SEPERATOR "tid"
+		FIELD_SEPERATOR "parentGP" // GetParent()
+		FIELD_SEPERATOR "parent"
+		FIELD_SEPERATOR "parentGA" // GetAncestor()
+		FIELD_SEPERATOR " pid"
+		FIELD_SEPERATOR " tid"
 		FIELD_SEPERATOR "process name"
 		FIELD_SEPERATOR "class name"
 		FIELD_SEPERATOR "window title"
@@ -191,11 +195,22 @@ inline void node_t::output_node_and_children(std::wostream & os, int indent)
 	// padding
 	std::fill_n(std::ostreambuf_iterator<wchar_t>(os), max_depth_from_root()-1-indent, L' ');
 
+	auto hOwner                   = (HWND)::GetWindow(m_hCurrent, GW_OWNER);
+	auto hParent                  = (HWND)::GetWindowLongPtr(m_hCurrent, GWLP_HWNDPARENT);
+	auto hParent_from_GetParent   = ::GetParent(m_hCurrent);
+	auto hParent_from_GetAncestor = ::GetAncestor(m_hCurrent, GA_PARENT);
+	bool is_top_level  = (m_hCurrent == GetAncestor(m_hCurrent, GA_ROOT));
+	bool is_top_level2 = !(GetWindowLong(m_hCurrent, GWL_STYLE) & WS_CHILD);
 	os << std::hex
-		<< FIELD_SEPERATOR << std::setw(8) << (m_pParent ? m_pParent->m_hCurrent : nullptr)
-		<< FIELD_SEPERATOR << GetWindow(m_hCurrent, GW_OWNER)
+		//<< FIELD_SEPERATOR << std::setw(8) << (m_pParent ? m_pParent->m_hCurrent : nullptr)
+		<< FIELD_SEPERATOR << is_top_level
+		<< FIELD_SEPERATOR << is_top_level2
+		<< FIELD_SEPERATOR << std::setw(8) << hOwner
+		<< FIELD_SEPERATOR << std::setw(8) << hParent_from_GetParent
+		<< FIELD_SEPERATOR << std::setw(8) << hParent
+		<< FIELD_SEPERATOR << std::setw(8) << hParent_from_GetAncestor
 		<< FIELD_SEPERATOR << std::setw(4) << m_pid
-		<< FIELD_SEPERATOR << m_tid
+		<< FIELD_SEPERATOR << std::setw(4) << m_tid
 		<< FIELD_SEPERATOR << *m_pExe_name << std::dec
 		<< FIELD_SEPERATOR;
 
