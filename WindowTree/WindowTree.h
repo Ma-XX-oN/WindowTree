@@ -36,10 +36,10 @@ struct node_t
 	// PROPERTIES
 
 	// Type of window
-	window_type_e m_eType;
+	window_type_e m_eType = invalid;
 
 	// HWND that this window is referencing
-	HWND m_hCurrent;
+	HWND m_hCurrent = nullptr;
 
 	// Parent node where m_pParent->m_hCurrent == ::GetParent(m_hCurrent),
 	// unless m_pParent is nullptr, then ::GetParent(m_hCurrent) == nullptr
@@ -54,14 +54,27 @@ struct node_t
 	// Used to count how many handles have been outputted.
 	static size_t outputted_handle_count;
 
-	std::wstring const* m_pExe_name;
-	DWORD m_pid;
-	DWORD m_tid;
+	std::wstring const* m_pExe_name = nullptr;
+	DWORD m_pid = 0;
+	DWORD m_tid = 0;
+
+	std::wstring const* m_pClass_name = nullptr;
+	std::wstring m_title;
+	bool m_bVisible;
+
+	int value = 0;
 
 	// METHODS
 
 	// Constructor
-	node_t(HWND hCurrent, window_type_e type, DWORD pid, DWORD tid, std::wstring const* exe_name);
+	node_t(HWND hCurrent, window_type_e type);
+	
+	// Create a node with no info in it except that it is a parent to pChild
+	node_t(HWND hCurrent, node_t* pChild);
+
+	void add_info(HWND hCurrent, window_type_e type);
+
+	void set_other_attributes();
 
 	// Verifies that node is parented correctly
 	verify_correctly_parented_e verify_correctly_parented() const;
@@ -85,4 +98,3 @@ struct node_t
 	size_t max_depth_from_here() const;
 };
 
-void output_window_tree(const char * filename);
