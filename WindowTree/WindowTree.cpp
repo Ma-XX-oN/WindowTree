@@ -120,10 +120,10 @@ auto& output_window_class_and_title(std::wostream & os, const HWND &hWnd)
 	// replacing any CRLFs with field separators
 	auto wc
 		= std::regex_replace(window_class, std::wregex(L"(\r\n?|\n\r?)")
-			, L" " );
+			, L"\\r\\n" );
 	auto wt
 		= std::regex_replace(window_title, std::wregex(L"(\r\n?|\n\r?)")
-			, L" " );
+			, L"\\r\\n" );
 
 	os << CW2A(wc.c_str()) << FIELD_SEPERATOR << CW2A(wt.c_str());
 	return os;
@@ -229,7 +229,6 @@ void node_t::add_info(HWND hCurrent, window_type_e type)
 
 void node_t::set_other_attributes()
 {
-	return;
 	if (m_hCurrent) {
 		DWORD pid;
 		auto tid = ::GetWindowThreadProcessId(m_hCurrent, &pid);
@@ -654,8 +653,6 @@ void output_window_tree(const char * filename)
 
 int main()
 {
-	build_tree();
-
 	char response;
 	do {
 		POINT ptLast;
@@ -686,7 +683,10 @@ int main()
 			os.exceptions(os.badbit | os.failbit | os.eofbit);
 			clear_mark();
 
+			auto start = GetTickCount64();
 			build_tree();
+			auto end = GetTickCount64();
+			std::cout << std::endl << "build tree time: " << (end - start) << std::endl;
 			output_window_tree(filename);
 
 			std::cout << std::endl;
@@ -708,8 +708,8 @@ int main()
 			}
 			output_window_tree(std::wcout);
 		}
-		std::cout << "Again (y/n)?" << std::endl;
 		do {
+			std::cout << "Again (y/n)?" << std::endl;
 			std::cin >> response;
 		} while (response != 'y' && response != 'n');
 	} while (response == 'y');
