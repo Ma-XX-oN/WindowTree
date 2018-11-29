@@ -71,7 +71,7 @@ std::wostream& operator<<(std::wostream& os, verify_correctly_parented_e value)
 		os << "parent node not found";
 		break;
 	case parent_was_null:
-		os << "parent node was null";
+		os << "parent node was null ";
 		break;
 	case parent_was_different:
 		os << "parent node was wrong";
@@ -91,10 +91,14 @@ void output_heading(std::wostream& os)
 	os << "window_status"
 		FIELD_SEPERATOR "got expected"
 		FIELD_SEPERATOR "visible"
+		FIELD_SEPERATOR "P&O both null"
+		FIELD_SEPERATOR "GetParent null"
+		FIELD_SEPERATOR "(P)arent/(O)wner"
 		FIELD_SEPERATOR "tree"
 		//FIELD_SEPERATOR "pad"
 		FIELD_SEPERATOR "parent"
 		FIELD_SEPERATOR "owner"
+		FIELD_SEPERATOR "GetParent"
 		FIELD_SEPERATOR "pid"
 		FIELD_SEPERATOR "tid"
 		FIELD_SEPERATOR "process name"
@@ -143,7 +147,16 @@ inline verify_correctly_parented_e node_t::verify_correctly_parented() const
 		return correct;
 	}
 
-	HWND hParent = ::GetParent(m_hCurrent);
+	auto hOwner = (HWND)::GetWindow(m_hCurrent, GW_OWNER);
+	auto hParent = (HWND)::GetWindowLongPtr(m_hCurrent, GWLP_HWNDPARENT);
+	auto hParent_from_GetParent = ::GetParent(m_hCurrent);
+	return correct;
+	if (!hOwner && !hParent && !hParent_from_GetParent) {
+		if (m_hCurrent) {
+			return parent_was_null;
+		}
+	}
+	return correct;
 	auto found_parent_node = all_nodes.find(hParent);
 	if (found_parent_node == all_nodes.end()) {
 		return parent_node_not_found;
@@ -171,17 +184,110 @@ inline void node_t::add_child(node_t * pChild)
 	pChild->m_pParent = this;
 }
 
+inline void node_t::add_owned(node_t * pOwned)
+{
+	bool inserted;
+	decltype(m_hwnd_to_owned_node)::iterator itOwned;
+	std::tie(itOwned, inserted)
+		= m_hwnd_to_owned_node.try_emplace(pOwned->m_hCurrent, pOwned);
+	// Should be newly inserted, or should be already point at this.
+	assert(inserted && pOwned->m_pOwner == nullptr
+		|| pOwned->m_pOwner == this);
+	// These should point at the same node.
+	assert(itOwned->second == pOwned);
+	pOwned->m_pOwner = this;
+}
+
+node_t* get_node(HWND hWnd);
+
+
+char const * get_relationship_to_parent_type(HWND hWnd)
+{
+	auto hOwner = (HWND)::GetWindow(hWnd, GW_OWNER);
+	//auto hParent = (HWND)::GetWindowLongPtr(hWnd, GWLP_HWNDPARENT);
+	auto hParent = ::GetAncestor(hWnd, GA_PARENT);
+	auto hParent_from_GetParent = ::GetParent(hWnd);
+
+	/*
+	00 - point at root            " "
+	01 - point at same GetParent  "F"
+	10 - point at same Parent     "P"
+	11 - point as same Owner      "O"
+
+	parent, owner, GetParent result
+	*/
+	if (!hParent && !hOwner && !hParent_from_GetParent) {
+		return "   ";
+	}
+	if (hParent && hParent == hOwner && hOwner == hParent_from_GetParent) {
+		return "FFF";
+	}
+	if (hParent_from_GetParent) {
+		if (hParent_from_GetParent == hParent) {
+			if (hOwner)
+				return "FOF"; // garbage
+			return "F F";
+		}
+		if (hParent_from_GetParent == hOwner) {
+			if (hParent)
+				return "PFF"; // not found yet
+			return " FF";
+		}
+	}
+	if (hParent) {
+		if (hParent == hOwner) {
+			if (hParent_from_GetParent)
+				return "FPP";
+			return " PP";
+		}
+		if (hOwner)
+			if (hParent_from_GetParent)
+				return "POF";
+			else
+				return "PO "; // garbage
+		else
+			if (hParent_from_GetParent)
+				return "P F";
+			else
+				return "P  ";
+	}
+	else {
+		if (hOwner)
+			if (hParent_from_GetParent)
+				return " OF";
+			else
+				return " O ";
+		else
+			if (hParent_from_GetParent)
+				return "  F";
+			else
+				return "   ";
+	}
+	assert(false);
+	return nullptr;
+}
+
 // Output info for current and children nodes
-inline void node_t::output_node_and_children(std::wostream & os, int indent)
+inline void node_t::output_node_and_decendents(std::wostream & os, int indent)
 {
 	HWND hWnd = m_hCurrent;
 	if (output_handle_count) {
 		os << std::setw(7) << ++outputted_handle_count
 			<< FIELD_SEPERATOR;
 	}
-	os << m_eType
-		<< FIELD_SEPERATOR << verify_correctly_parented()
+	auto hOwner = (HWND)::GetWindow(m_hCurrent, GW_OWNER);
+	auto hParent = (HWND)::GetWindowLongPtr(m_hCurrent, GWLP_HWNDPARENT);
+	auto hParent_from_GetAncestor = ::GetAncestor(m_hCurrent, GA_PARENT);
+	//assert(hParent == hParent2);
+	auto hParent_from_GetParent = ::GetParent(m_hCurrent);
+	//assert(!m_pParent || m_pParent == get_node(hParent));
+	//assert(!m_pOwner || m_pOwner == get_node(hOwner));
+	os << verify_correctly_parented()
+		<< FIELD_SEPERATOR << m_eType
 		<< FIELD_SEPERATOR << ::IsWindowVisible(hWnd)
+		<< FIELD_SEPERATOR << parent_owner_both_null
+		<< FIELD_SEPERATOR << (::GetParent(m_hCurrent) == nullptr)
+		<< FIELD_SEPERATOR << get_relationship_to_parent_type(m_hCurrent)
 		<< FIELD_SEPERATOR "\"";
 
 	std::fill_n(std::ostreambuf_iterator<wchar_t>(os), indent, L' ');
@@ -189,23 +295,41 @@ inline void node_t::output_node_and_children(std::wostream & os, int indent)
 		<< L"\"";
 	
 	// padding
-	std::fill_n(std::ostreambuf_iterator<wchar_t>(os), max_depth_from_root()-1-indent, L' ');
+	std::fill_n(std::ostreambuf_iterator<wchar_t>(os), max_depth_from_root()-indent, L' ');
 
-	os << std::hex
-		<< FIELD_SEPERATOR << std::setw(8) << (m_pParent ? m_pParent->m_hCurrent : nullptr)
-		<< FIELD_SEPERATOR << GetWindow(m_hCurrent, GW_OWNER)
-		<< FIELD_SEPERATOR << std::setw(4) << m_pid
-		<< FIELD_SEPERATOR << m_tid
+	os << std::hex << std::setw(8)
+		<< FIELD_SEPERATOR " " << hOwner
+		<< " " FIELD_SEPERATOR " " << hParent_from_GetParent
+		<< " " FIELD_SEPERATOR " " << hParent
+		<< " " FIELD_SEPERATOR " " << hParent_from_GetAncestor
+		<< " " FIELD_SEPERATOR << std::setw(4) << m_pid
+		<< FIELD_SEPERATOR << std::setw(4) << m_tid
 		<< FIELD_SEPERATOR << *m_pExe_name << std::dec
 		<< FIELD_SEPERATOR;
 
-	output_window_class_and_title(os, hWnd) << std::endl;
+	output_window_class_and_title(os, hWnd);
 
-	m_bMarked = true;
+	if (m_bMarked) {
+		os << FIELD_SEPERATOR << "* REENTRENT *";// << std::endl;
+	}
+	if (true || !m_bMarked) {
+		m_bMarked = true;
 
-	// Output child node info
-	for (auto& child_node : m_hwnd_to_child_node) {
-		child_node.second->output_node_and_children(os, indent + 1);
+		os << std::endl;
+		os.flush();
+
+		// Output owned node info
+		for (auto& owned_node : m_hwnd_to_owned_node) {
+			owned_node.second->output_node_and_decendents(os, indent + 1);
+		}
+		// Output child node info
+		for (auto& child_node : m_hwnd_to_child_node) {
+			child_node.second->output_node_and_decendents(os, indent + 1);
+		}
+	}
+	else
+	{
+		os << FIELD_SEPERATOR << "* REENTRENT *" << std::endl;
 	}
 }
 
@@ -241,7 +365,7 @@ std::map<DWORD, std::wstring const*> pid_to_exe_name;
 
 void allocate_node(HWND hwnd, window_type_e window_status)
 {
-	DWORD pid;
+	DWORD pid = 0xBAD;
 	auto tid = ::GetWindowThreadProcessId(hwnd, &pid);
 	auto it_found_pid = pid_to_exe_name.find(pid);
 	std::wstring const* pProcess_name = nullptr;
@@ -289,9 +413,21 @@ void ensure_all_nodes_to_root_allocated(HWND hWnd)
 		assert(found_node != all_nodes.end()); // Found node should now be valid
 	}
 
+	auto& node = found_node->second;
 	// Check if parent has been checked and if not, check it.
-	if (!found_node->second.m_bMarked) {
-		found_node->second.m_bMarked = true;
+	if (!node.m_bMarked) {
+		node.m_bMarked = true;
+
+		//if (node.m_eType == top_level || node.m_eType == message) {
+		//	if (HWND hOwner = (HWND)::GetWindowLongPtr(hWnd, GW_OWNER)) {
+		//		//assert(hOwner == ::GetParent(hWnd));
+		//		ensure_all_nodes_to_root_allocated(hOwner);
+		//	}
+		//}
+		//if (HWND hParent = (HWND)::GetWindowLongPtr(hWnd, GWLP_HWNDPARENT)) {
+		//	//assert(hParent == ::GetParent(hWnd));
+		//	ensure_all_nodes_to_root_allocated(hParent);
+		//}
 		if (HWND hParent = ::GetParent(hWnd)) {
 			ensure_all_nodes_to_root_allocated(hParent);
 		}
@@ -421,8 +557,32 @@ void attach_parent_nodes_to_their_children()
 			auto pWnd = get_node(hWnd);
 			assert(pWnd);
 			assert(pWnd->m_hCurrent);
-			auto pParent = get_node(::GetParent(hWnd));
-			pParent->add_child(pWnd);
+			auto hParent_from_GetParent = ::GetParent(hWnd);
+			get_node(hParent_from_GetParent)->add_child(pWnd);
+			continue;
+
+			auto hOwner = (pWnd->m_eType == top_level) ? (HWND)::GetWindow(hWnd, GW_OWNER) : nullptr;
+			auto hParent = (pWnd->m_eType != top_level) ? (HWND)::GetWindowLongPtr(hWnd, GWLP_HWNDPARENT) : nullptr;
+			//assert(
+			//	!hParent && !hOwner
+			//	|| hOwner && hParent_from_GetParent == hOwner
+			//	|| hParent && hParent_from_GetParent == hParent
+			//	|| hOwner && hParent
+			//	&& (hOwner == hParent
+			//		|| hParent_from_GetParent == hOwner
+			//		|| hParent_from_GetParent == hParent
+			//		|| hParent_from_GetParent == nullptr
+			//	)
+			//	|| hParent_from_GetParent == nullptr
+			//);
+//			assert(!(hParent && hOwner)); // never both
+
+			if (!hParent) {
+				get_node(hParent_from_GetParent)->add_child(pWnd);
+			}
+			else {
+				get_node(hOwner)->add_owned(pWnd);
+			}
 		}
 	}
 }
@@ -430,7 +590,7 @@ void attach_parent_nodes_to_their_children()
 // Output all of the node information to the output stream.
 void output_node_structure(std::wostream& os)
 {
-	all_nodes.find(nullptr)->second.output_node_and_children(os);
+	all_nodes.find(nullptr)->second.output_node_and_decendents(os);
 }
 
 // Outputs broken relationships if any. Shouldn't result in any output.
@@ -452,7 +612,7 @@ void output_broken_node_structure(std::wostream& os)
 				}
 
 				os << "Broken child/parent relationship!\n";
-				root->output_node_and_children(os);
+				root->output_node_and_decendents(os);
 				os << std::endl;
 			}
 		}
