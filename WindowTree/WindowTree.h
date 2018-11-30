@@ -48,32 +48,50 @@ struct node_t
 	// HWND to child nodes (node_t*)
 	hwnd_to_children_ptr_t m_hwnd_to_child_node;
 
-	// Used to mark node for operations where don't want to duplicate
+	// Used to mark node for operations where don't want to duplicate 
+	// operations done.
 	bool m_bMarked = false;
 
 	// Used to count how many handles have been outputted.
 	static size_t outputted_handle_count;
 
-	std::wstring const* m_pExe_name = nullptr;
+	// Process id
 	DWORD m_pid = 0;
+	// Thread id
 	DWORD m_tid = 0;
+	// Exe name (uses cache so as not to look it up all the time and share
+	// storage)
+	std::wstring const* m_pExe_name = nullptr;
 
+	// Exe name (uses cache so can share storage)
 	std::wstring const* m_pClass_name = nullptr;
-	std::wstring m_title;
+	// Text will most likely be different so, no cache required.
+	std::wstring m_text;
+
+	// Is the window visible
 	bool m_bVisible;
 
+	// Rectangle for window
+	RECT m_rect;
+
+	// General value
 	int value = 0;
 
 	// METHODS
 
-	// Constructor
+	node_t(node_t const&) = delete;
+	node_t& operator=(node_t const&) = delete;
+
+	// Constructor - specifies what type it is and will add other window info.
 	node_t(HWND hCurrent, window_type_e type);
 	
 	// Create a node with no info in it except that it is a parent to pChild
 	node_t(HWND hCurrent, node_t* pChild);
 
+	// Does the same as constructor with same parameters
 	void add_info(HWND hCurrent, window_type_e type);
 
+	// Used to set attributes of node to HWND
 	void set_other_attributes();
 
 	// Verifies that node is parented correctly

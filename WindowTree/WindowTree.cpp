@@ -87,19 +87,28 @@ std::wostream& operator<<(std::wostream& os, verify_correctly_parented_e value)
 void output_heading(std::wostream& os)
 {
 	if (output_handle_count) {
-		os << "handle  " FIELD_SEPERATOR;
+		os << "handle#" FIELD_SEPERATOR;
 	}
 	//handle ! window_status!expected!v!tree               !O!o!owner   !parentGP!parent  !parentGA! pid! tid!process name!class name!window title
 	os << " window_status"
-		FIELD_SEPERATOR "expected"
-		FIELD_SEPERATOR "v" // visible
-		FIELD_SEPERATOR "tree               "
+		FIELD_SEPERATOR "right? "
+		FIELD_SEPERATOR "V" // visible
+		FIELD_SEPERATOR "v" // value
+		FIELD_SEPERATOR "   left"
+		FIELD_SEPERATOR "    top"
+		FIELD_SEPERATOR " bottom"
+		FIELD_SEPERATOR "  right"
+		FIELD_SEPERATOR "  width"
+		FIELD_SEPERATOR " height"
+		FIELD_SEPERATOR "     x-pos"
+		FIELD_SEPERATOR "     y-pos"
+		FIELD_SEPERATOR "        " "               tree"
 		FIELD_SEPERATOR "T" // Is top level  (m_hCurrent == GetAncestor(m_hCurrent, GA_ROOT))
 		FIELD_SEPERATOR "t" // Is top level !(GetWindowLong(m_hCurrent, GWL_STYLE) & WS_CHILD)
-		FIELD_SEPERATOR "owner"
-		FIELD_SEPERATOR "parentGP" // GetParent()
-		FIELD_SEPERATOR "parent"
-		FIELD_SEPERATOR "parentGA" // GetAncestor()
+		FIELD_SEPERATOR "           owner"
+		FIELD_SEPERATOR "        parentGP" // GetParent()
+		FIELD_SEPERATOR "          parent"
+		FIELD_SEPERATOR "        parentGA" // GetAncestor()
 		FIELD_SEPERATOR " pid"
 		FIELD_SEPERATOR " tid"
 		FIELD_SEPERATOR "process name"
@@ -110,27 +119,8 @@ void output_heading(std::wostream& os)
 
 #endif
 
-auto& output_window_class_and_title(std::wostream & os, const HWND &hWnd)
-{
-	wchar_t window_class[1024], window_title[1024];
-	window_class[0] = window_title[0] = 0;
-
-	::GetClassNameW(hWnd, window_class, _countof(window_class));
-	::GetWindowTextW(hWnd, window_title, _countof(window_title));
-	// replacing any CRLFs with field separators
-	auto wc
-		= std::regex_replace(window_class, std::wregex(L"(\r\n?|\n\r?)")
-			, L"\\r\\n" );
-	auto wt
-		= std::regex_replace(window_title, std::wregex(L"(\r\n?|\n\r?)")
-			, L"\\r\\n" );
-
-	os << CW2A(wc.c_str()) << FIELD_SEPERATOR << CW2A(wt.c_str());
-	return os;
-}
-
 // Store exe names
-std::set<std::wstring> exe_names;
+std::set<std::wstring, std::less<>> exe_names;
 
 // Map pid to exe name
 std::map<DWORD, std::wstring const*> pid_to_exe_name;
@@ -167,7 +157,7 @@ const std::wstring * GetProcessName(DWORD pid)
 	return pProcess_name;
 }
 
-std::set<std::wstring> class_names;
+std::set<std::wstring, std::less<>> class_names;
 
 const std::wstring * get_window_class_name(HWND hwnd)
 {
@@ -188,8 +178,10 @@ std::wstring get_window_text(HWND hwnd)
 {
 	auto len = GetWindowTextLengthW(hwnd);
 	std::wstring text;
-	text.resize(len);
-	GetWindowTextW(hwnd, &text[0], len);
+	text.resize(len+1);
+	GetWindowTextW(hwnd, &text[0], len+1);
+	text = std::regex_replace(text, std::wregex(L"(\r\n?|\n\r?)")
+			, L"\\r\\n");
 	return text;
 }
 
@@ -209,14 +201,8 @@ inline node_t::node_t(HWND hCurrent, window_type_e type)
 }
 
 node_t::node_t(HWND hCurrent, node_t* pChild)
-	//: m_hCurrent(hCurrent)
 {
-	bool inserted;
-	hwnd_to_children_ptr_t::iterator itChild;
-	std::tie(itChild, inserted)
-		= m_hwnd_to_child_node.try_emplace(pChild->m_hCurrent, pChild);
-	assert(inserted); // Should never insert same node multiple times.
-	pChild->m_pParent = this;
+	add_child(pChild);
 }
 
 void node_t::add_info(HWND hCurrent, window_type_e type)
@@ -235,14 +221,16 @@ void node_t::set_other_attributes()
 		m_pid = pid;
 		m_tid = tid;
 		m_pExe_name = GetProcessName(pid);
+		::GetWindowRect(m_hCurrent, &m_rect);
 	}
 	else {
 		m_pid = m_tid = 0;
 		auto found = exe_names.emplace(L"* Root handle has no associated process *");
 		m_pExe_name = &*found.first;
+		m_rect.left = m_rect.top = m_rect.right = m_rect.bottom = 0;
 	}
 	m_pClass_name = get_window_class_name(m_hCurrent);
-	m_title = get_window_text(m_hCurrent);
+	m_text = get_window_text(m_hCurrent);
 	m_bVisible = ::IsWindowVisible(m_hCurrent);
 }
 
@@ -285,39 +273,60 @@ inline void node_t::add_child(node_t * pChild)
 inline void node_t::output_node_and_children(std::wostream & os, int indent)
 {
 	if (!m_bMarked) {
-		HWND hWnd = m_hCurrent;
 		if (output_handle_count) {
 			os << std::setw(7) << ++outputted_handle_count
 				<< FIELD_SEPERATOR;
 		}
-		RECT rect;
-		auto get_rect_success = ::GetWindowRect(m_hCurrent, &rect);
 		os << m_eType
 			<< FIELD_SEPERATOR << verify_correctly_parented()
-			<< FIELD_SEPERATOR << ::IsWindowVisible(hWnd)
-			<< FIELD_SEPERATOR << value;
-		size_t min_coord_width = 7; // 10;
-		if (get_rect_success && rect.right - rect.left > 0 && rect.bottom - rect.top > 0) {
-			os	<< FIELD_SEPERATOR << "("
-				<< std::setw(min_coord_width) << rect.left << ", "
-				<< std::setw(min_coord_width) << rect.top << ", "
-				<< std::setw(min_coord_width) << rect.right << ", "
-				<< std::setw(min_coord_width) << rect.bottom << ")"
-				<< FIELD_SEPERATOR << "("
-				<< std::fixed << std::setw(9) << std::setprecision(2) << (((pt.x - rect.left) * 100.0) / (rect.right - rect.left)) << "%, "
-				<< std::fixed << std::setw(9) << std::setprecision(2) << (((pt.y - rect.top ) * 100.0) / (rect.bottom - rect.top)) << "%)";
+			<< FIELD_SEPERATOR << ::IsWindowVisible(m_hCurrent)
+			<< FIELD_SEPERATOR << value
+			<< FIELD_SEPERATOR;
+		size_t min_coord_width = 7;
+		size_t min_percent_coord_width = 9;
+		if (m_hCurrent) {
+			os	<< std::setw(min_coord_width) << m_rect.left << FIELD_SEPERATOR
+				<< std::setw(min_coord_width) << m_rect.top << FIELD_SEPERATOR
+				<< std::setw(min_coord_width) << m_rect.right << FIELD_SEPERATOR
+				<< std::setw(min_coord_width) << m_rect.bottom << FIELD_SEPERATOR
+				<< std::setw(min_coord_width) << (m_rect.right - m_rect.left) << FIELD_SEPERATOR
+				<< std::setw(min_coord_width) << (m_rect.bottom - m_rect.top) << FIELD_SEPERATOR
+				;
+			if (m_rect.right - m_rect.left > 0) {
+				auto percent_x = (((pt.x - m_rect.left) * 100.0) / (m_rect.right - m_rect.left));
+				os	<< std::fixed << std::setw(min_percent_coord_width)
+					<< std::setprecision(abs(percent_x) >= 100000 ? 1 : 2)
+					<< percent_x << "%" FIELD_SEPERATOR;
+			}
+			else {
+				std::fill_n(std::ostreambuf_iterator<wchar_t>(os), min_percent_coord_width + 1, L' ');
+				os << FIELD_SEPERATOR;
+			}
+			if (m_rect.bottom - m_rect.top > 0) {
+				auto percent_y = (((pt.y - m_rect.top) * 100.0) / (m_rect.bottom - m_rect.top));
+				os << std::fixed << std::setw(min_percent_coord_width)
+					<< std::setprecision(abs(percent_y) >= 100000 ? 1 : 2)
+					<< percent_y << "%" FIELD_SEPERATOR;
+			}
+			else {
+				std::fill_n(std::ostreambuf_iterator<wchar_t>(os), min_percent_coord_width + 1, L' ');
+				os << FIELD_SEPERATOR;
+			}
 		}
 		else {
-			os << FIELD_SEPERATOR; //<< "(";
-			std::fill_n(std::ostream_iterator<wchar_t const*, wchar_t>(os), 4, L"         ");
-			os << FIELD_SEPERATOR; //<< "(";
-			std::fill_n(std::ostream_iterator<wchar_t const*, wchar_t>(os), 2, L"            ");
+			for (int i = 0; i < 6; ++i) {
+				std::fill_n(std::ostreambuf_iterator<wchar_t>(os), min_coord_width, L' ');
+				os << FIELD_SEPERATOR;
+			}
+			for (int i = 0; i < 2; ++i) {
+				std::fill_n(std::ostreambuf_iterator<wchar_t>(os), min_percent_coord_width + 1, L' ');
+				os << FIELD_SEPERATOR;
+			}
 		}
-		os
-			<< FIELD_SEPERATOR "\"";
+		os	<< "\"";
 
 		std::fill_n(std::ostreambuf_iterator<wchar_t>(os), indent, L' ');
-		os << hWnd
+		os << m_hCurrent
 			<< L"\"";
 
 		// padding
@@ -340,10 +349,11 @@ inline void node_t::output_node_and_children(std::wostream & os, int indent)
 			<< FIELD_SEPERATOR << std::setw(8) << hParent_from_GetAncestor
 			<< FIELD_SEPERATOR << std::setw(4) << m_pid
 			<< FIELD_SEPERATOR << std::setw(4) << m_tid
-			<< FIELD_SEPERATOR << (m_pExe_name ? *m_pExe_name : L"nullptr") << std::dec
-			<< FIELD_SEPERATOR;
-
-		output_window_class_and_title(os, hWnd) << std::endl;
+			<< FIELD_SEPERATOR << (m_pExe_name ? *m_pExe_name : L"nullptr")
+			<< FIELD_SEPERATOR << (m_pClass_name ? *m_pClass_name : L"nullptr")
+			<< FIELD_SEPERATOR << CW2A(m_text.c_str())
+			<< std::dec << std::endl;
+			;
 
 		m_bMarked = true;
 
@@ -388,12 +398,15 @@ void allocate_node(HWND hwnd, window_type_e window_status)
 	std::tie(itNode, inserted)
 		= all_nodes.try_emplace(hwnd, hwnd, window_status);
 	if (!inserted) {
-		assert(itNode->second.m_hCurrent == nullptr);
+		// Node may have been allocated as parent, but must not have been
+		// initialised with information.
+		assert(itNode->second.m_hCurrent == nullptr && itNode->second.m_eType == invalid);
 		itNode->second.add_info(hwnd, window_status);
 	}
 
-	// If root HWND, don't add parent
 	if (hwnd) {
+		// Allocate parent node, but only to link parent/child relationship.
+		// Don't initialise with information.
 		decltype(all_nodes)::iterator itParentNode;
 		auto hParent = ::GetParent(hwnd);
 		std::tie(itParentNode, inserted)
@@ -411,7 +424,7 @@ void ensure_all_nodes_to_root_allocated(HWND hWnd)
 	auto found_node = all_nodes.find(hWnd);
 
 	assert(found_node != all_nodes.end());
-	if (found_node->second.m_hCurrent == nullptr) {
+	if (found_node->second.m_eType == invalid) {
 		allocate_node(hWnd, not_enumable);
 		found_node = all_nodes.find(hWnd);
 		assert(found_node != all_nodes.end()); // Found node should now be valid
@@ -590,7 +603,7 @@ void output_broken_node_structure(std::wostream& os)
 			{
 				found_broken = true;
 
-				while (root->m_hCurrent && root->m_pParent) {
+				while (root->m_hCurrent && root->m_pParent && !root->m_pParent->m_bMarked) {
 					root = root->m_pParent;
 				}
 
@@ -657,46 +670,43 @@ int main()
 	do {
 		POINT ptLast;
 		std::cout << "Find all windows and parents at coord:" << std::endl;
-		int count = 0;
+		int count = 5;
 		do {
+			auto start = GetTickCount64();
+			build_tree();
+			auto end = GetTickCount64();
+
 			ptLast = pt;
 			::GetCursorPos(&pt);
 			if (ptLast.x == pt.x && ptLast.y == pt.y) {
-				++count;
+				--count;
 			}
 			else {
-				count = 0;
+				count = 5;
+			}
+			size_t windows_found = 0;
+			for (auto& node : all_nodes) {
+				if (node.second.m_bVisible && ::PtInRect(&node.second.m_rect, pt)) {
+					++windows_found;
+				}
 			}
 			std::cout
 				<< "("
 				<< std::setw(10) << pt.x << ", "
 				<< std::setw(10) << pt.y << ") "
-				<< std::setw(8) << count << "\r";
+				<< std::setw(8) << "tree build time: " << (end - start) << "ms "
+				<< std::setw(8) << "found visible windows: " << windows_found << " "
+				<< std::setw(8) << "snapshot in: " << count << "s.    \r";
 			std::flush(std::cout);
 			::Sleep(1000);
-		} while (count < 5);
+		} while (count > 0);
 
 		{
-			auto* filename = "window-tree.txt";
-			static std::wfstream os(filename, std::ios_base::out | std::ios_base::trunc);
-			//static auto& os = std::wcout;
-			os.exceptions(os.badbit | os.failbit | os.eofbit);
-			clear_mark();
-
-			auto start = GetTickCount64();
-			build_tree();
-			auto end = GetTickCount64();
-			std::cout << std::endl << "build tree time: " << (end - start) << std::endl;
-			output_window_tree(filename);
-
-			std::cout << std::endl;
 			set_mark();
 			for (auto& hwnd_node_pair : all_nodes) {
-				RECT rect;
 				auto& node = hwnd_node_pair.second;
-				auto hwnd = node.m_hCurrent;
-				if (::IsWindowVisible(hwnd) && ::GetWindowRect(hwnd, &rect)) {
-					if (::PtInRect(&rect, pt)) {
+				if (node.m_bVisible && node.m_hCurrent) {
+					if (::PtInRect(&node.m_rect, pt)) {
 						node.value = 1;
 						node.m_bMarked = false;
 						auto* parent_node = node.m_pParent;
@@ -706,7 +716,17 @@ int main()
 					}
 				}
 			}
+			std::wcout << std::endl;
+			node_t::outputted_handle_count = 0;
 			output_window_tree(std::wcout);
+			
+			clear_mark();
+			auto* filename = "window-tree.txt";
+			static std::wfstream os(filename, std::ios_base::out | std::ios_base::trunc);
+			os.exceptions(os.badbit | os.failbit | os.eofbit);
+
+			node_t::outputted_handle_count = 0;
+			output_window_tree(filename);
 		}
 		do {
 			std::cout << "Again (y/n)?" << std::endl;
